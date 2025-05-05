@@ -1,19 +1,20 @@
-# Import the node class
-from .facemesh_eyewear_mask import FaceMeshEyewearMask
+# __init__.py
 
-# A dictionary that routes node lists and mappings to the appropriate resource lists
+# Import the module containing the node class AND the mappings
+from . import facemesh_eyewear_mask
+
+# Access the mappings defined at the module level in facemesh_eyewear_mask.py
 NODE_CLASS_MAPPINGS = {
-    **FaceMeshEyewearMask.NODE_CLASS_MAPPINGS,
+    **facemesh_eyewear_mask.NODE_CLASS_MAPPINGS,
     # Add other nodes here if you have more in this directory
 }
 
-# A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
-   **FaceMeshEyewearMask.NODE_DISPLAY_NAME_MAPPINGS,
+   **facemesh_eyewear_mask.NODE_DISPLAY_NAME_MAPPINGS,
    # Add other nodes here if you have more in this directory
 }
 
-# Export the mappings
+# Export the combined mappings
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
 
 print("Loaded Face Mesh Eyewear Mask Custom Node") # Optional: print statement to confirm loading
