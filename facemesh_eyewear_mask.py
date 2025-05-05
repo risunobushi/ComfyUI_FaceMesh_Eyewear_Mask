@@ -17,7 +17,8 @@ class FaceMeshEyewearMask:
     # Refined indices based on the visual target (yellow area)
     # Tracing the perimeter clockwise:
     EYEWEAR_REGION_INDICES = [
-        21, 68, 104, 69, 108, 151, 337, 299, 333, 298, 301, 389, 454, 366, 323, 491, 411, 425, 423, 294, 344, 440, 275, 4, 45, 220, 115, 48, 64, 203, 205, 147, 234, 21
+        21, 68, 104, 69, 108, 151, 337, 299, 333, 298, 301, 389, 454, 366, 323, # Removed 491 from here
+        411, 425, 423, 294, 344, 440, 275, 4, 45, 220, 115, 48, 64, 203, 205, 137, 127, 162, 21
     ]
 
     @classmethod
