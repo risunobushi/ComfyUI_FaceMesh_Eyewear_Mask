@@ -1,6 +1,7 @@
 mediapipe>=0.9.0,<0.11.0
 opencv-python>=4.5
 numpy
+einops
 # torch and torchvision are handled by ComfyUI
 
 # DWPose dependencies (usually handled by comfyui_controlnet_aux installation)
