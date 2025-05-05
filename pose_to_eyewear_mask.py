@@ -11,50 +11,62 @@ except ImportError:
 
 class MaskFromPoseKeypoints:
     # --- Keypoint Indices ---
-    # COCO 18 format (from 'pose_keypoints_2d')
+    # COCO 18 format (from 'pose_keypoints_2d') - Indices 0-17
     COCO_NOSE = 0
     COCO_LEYE = 15
-    COCO_REYE = 14
+    COCO_REYE = 14 # Corrected
     COCO_LEAR = 17
-    COCO_REAR = 16
+    COCO_REAR = 16 # Corrected
     COCO_MAX_INDEX = 17
 
-    # Facial 68 format (from 'face_keypoints_2d') - Selected points
+    # Facial 68 format (from 'face_keypoints_2d') - Selected points for outline
     FACE_L_BROW_OUT = 17
-    FACE_L_BROW_IN = 21
-    FACE_R_BROW_IN = 22
+    FACE_L_BROW_1 = 18
+    FACE_L_BROW_2 = 19
+    FACE_L_BROW_3 = 20
+    FACE_L_BROW_IN = 21 # Inner
+    FACE_R_BROW_IN = 22 # Inner
+    FACE_R_BROW_1 = 23
+    FACE_R_BROW_2 = 24
+    FACE_R_BROW_3 = 25
     FACE_R_BROW_OUT = 26
     FACE_NOSE_BRIDGE_TOP = 27
-    FACE_NOSE_BOTTOM_MID = 33
     FACE_L_NOSE_WING_OUT = 31 # Near lower boundary
+    FACE_NOSE_BOTTOM_MID = 33
     FACE_R_NOSE_WING_OUT = 35 # Near lower boundary
-    FACE_L_CHEEK_SIDE = 1  # Approx side/lower boundary start
-    FACE_R_CHEEK_SIDE = 15 # Approx side/lower boundary start
+    FACE_L_CHEEK_SIDE = 1  # Approx side/lower boundary start (Jawline start)
+    FACE_R_CHEEK_SIDE = 15 # Approx side/lower boundary start (Jawline start)
     FACE_MAX_INDEX = 67
 
-    # Define the polygon order using a mix of points
-    # Goal: Trace L_Ear -> L_Brow -> NoseBridge -> R_Brow -> R_Ear -> R_Cheek -> NoseBottom -> L_Cheek -> L_Ear
+    # Define the polygon order using a mix of points (simpler bottom edge)
     POLYGON_ORDER = [
-        ("coco", COCO_LEAR),         # Start Left Ear
-        ("face", FACE_L_BROW_OUT),   # Up to Left Outer Brow
-        #("face", FACE_L_BROW_IN),   # Across Left Brow (optional refinement)
-        ("face", FACE_NOSE_BRIDGE_TOP),# Across Nose Bridge Top
-        #("face", FACE_R_BROW_IN),   # Across Right Brow (optional refinement)
-        ("face", FACE_R_BROW_OUT),   # To Right Outer Brow
-        ("coco", COCO_REAR),         # Down to Right Ear
-        ("face", FACE_R_CHEEK_SIDE), # Down/In along Right Cheek/Jaw start
-        ("face", FACE_R_NOSE_WING_OUT),# Inward under eye/nose wing right
-        ("face", FACE_NOSE_BOTTOM_MID),# Across bottom of nose
-        ("face", FACE_L_NOSE_WING_OUT),# Outward under eye/nose wing left
-        ("face", FACE_L_CHEEK_SIDE), # Out/Up along Left Cheek/Jaw start
-        #("coco", COCO_LEAR)         # Implicitly closed by fillPoly
+        ("coco", COCO_LEAR),            # 17: L Ear
+        ("face", FACE_L_BROW_OUT),      # 17: L Outer Brow Top
+        ("face", FACE_L_BROW_1),        # 18
+        ("face", FACE_L_BROW_2),        # 19
+        ("face", FACE_L_BROW_3),        # 20
+        ("face", FACE_L_BROW_IN),       # 21: L Inner Brow Top
+        ("face", FACE_NOSE_BRIDGE_TOP), # 27: Nose Bridge Top
+        ("face", FACE_R_BROW_IN),       # 22: R Inner Brow Top
+        ("face", FACE_R_BROW_1),        # 23
+        ("face", FACE_R_BROW_2),        # 24
+        ("face", FACE_R_BROW_3),        # 25
+        ("face", FACE_R_BROW_OUT),      # 26: R Outer Brow Top
+        ("coco", COCO_REAR),            # 16: R Ear
+        ("face", FACE_R_CHEEK_SIDE),    # 15: R Cheek Side (approx under ear)
+        ("face", FACE_R_NOSE_WING_OUT), # 35: R Nose Wing/Under Eye
+        ("face", FACE_NOSE_BOTTOM_MID), # 33: Nose Bottom Mid
+        ("face", FACE_L_NOSE_WING_OUT), # 31: L Nose Wing/Under Eye
+        ("face", FACE_L_CHEEK_SIDE)     # 1: L Cheek Side (approx under ear)
+        # Implicit close back to coco 17
     ]
 
-    # Minimum required keypoints for basic function (still Eyes/Nose from COCO)
+    # Minimum required keypoints for basic function (Eyes/Nose from COCO)
     REQUIRED_COCO_INDICES = [COCO_LEYE, COCO_NOSE, COCO_REYE] # 15, 0, 14
 
     @classmethod
     def INPUT_TYPES(cls):
+        # (INPUT_TYPES remains the same)
         return {
             "required": {
                 "pose_keypoints": ("POSE_KEYPOINT", ),
@@ -71,21 +83,19 @@ class MaskFromPoseKeypoints:
     CATEGORY = "image/masking/landmarks"
     OUTPUT_NODE = False
 
+    # (reshape_keypoints helper function remains the same)
     def reshape_keypoints(self, kps_list, source_name):
         """Helper to reshape flat list [x,y,c,...] to Nx3 numpy array."""
         if isinstance(kps_list, list) and len(kps_list) > 0 and len(kps_list) % 3 == 0:
             try:
                 num_keypoints = len(kps_list) // 3
                 if EINOPS_AVAILABLE:
-                    # Use einops if available
                     return rearrange(np.array(kps_list), "(n c) -> n c", n=num_keypoints, c=3)
                 else:
-                    # Fallback to numpy reshape
                     return np.array(kps_list).reshape(num_keypoints, 3)
             except Exception as e:
                 print(f"MaskFromPoseKeypoints: Error reshaping {source_name} keypoints list: {e}")
                 return None
-        # Handle case where it might already be [[x,y,c], ...]
         elif isinstance(kps_list, list) and len(kps_list) > 0 and isinstance(kps_list[0], list) and len(kps_list[0]) == 3:
              return np.array(kps_list)
         else:
@@ -93,6 +103,7 @@ class MaskFromPoseKeypoints:
              return None
 
     def generate_mask(self, pose_keypoints, reference_image, confidence_threshold, dilation_kernel_size, dilation_iterations):
+        # (Initial setup, batch handling, parsing logic remains the same)
         batch_size, img_h, img_w, _ = reference_image.shape
         output_masks = []
 
@@ -129,69 +140,60 @@ class MaskFromPoseKeypoints:
 
             # --- Polygon Construction ---
             polygon_coords = []
-            all_points_valid = True # Assume valid until proven otherwise
+            can_draw = True # Assume valid until proven otherwise
 
-            # Check basic requirements first
-            if coco_kps_array is None or coco_kps_array.shape[0] <= self.COCO_MAX_INDEX:
-                print(f"MaskFromPoseKeypoints: Image {i} - COCO keypoints missing or insufficient.")
-                all_points_valid = False
+            # Check if required arrays are available
+            if coco_kps_array is None or face_kps_array is None:
+                 print(f"MaskFromPoseKeypoints: Image {i} - Missing COCO or Facial keypoints array.")
+                 can_draw = False
+            elif coco_kps_array.shape[0] <= self.COCO_MAX_INDEX or face_kps_array.shape[0] <= self.FACE_MAX_INDEX:
+                 print(f"MaskFromPoseKeypoints: Image {i} - COCO ({coco_kps_array.shape[0]}) or Facial ({face_kps_array.shape[0]}) keypoints array too small.")
+                 can_draw = False
             else:
-                # Check if required COCO points (Eyes, Nose) meet confidence
-                required_coco_valid = True
+                # Check basic COCO requirements
                 for idx in self.REQUIRED_COCO_INDICES:
                     if coco_kps_array[idx, 2] < confidence_threshold:
-                        print(f"MaskFromPoseKeypoints: Image {i} - Required COCO keypoint {idx} below threshold ({coco_kps_array[idx, 2]:.2f} < {confidence_threshold})")
-                        required_coco_valid = False
-                        break
-                if not required_coco_valid:
-                    all_points_valid = False
+                        print(f"MaskFromPoseKeypoints: Image {i} - Required COCO keypoint {idx} below threshold.")
+                        can_draw = False; break
 
 
-            if all_points_valid and (face_kps_array is None or face_kps_array.shape[0] <= self.FACE_MAX_INDEX):
-                print(f"MaskFromPoseKeypoints: Image {i} - Facial keypoints missing or insufficient for refined mask.")
-                # Decide: Fallback to COCO-only mask or fail completely? Let's fail for now if face points requested implicitly.
-                # To fallback, you'd construct a polygon using only COCO points here.
-                all_points_valid = False
-
-
-            if all_points_valid:
+            if can_draw:
                 print(f"MaskFromPoseKeypoints: Image {i} - Attempting to build polygon using combined points.")
-                point_validity_checks = {} # For logging
+                points_ok = True
                 for point_type, index in self.POLYGON_ORDER:
                     kps_array = coco_kps_array if point_type == "coco" else face_kps_array
                     point_name = f"{point_type}_{index}"
 
-                    # Check index bounds (redundant if initial check passed, but safe)
+                    # Bounds check already done essentially, but safe to leave
                     if index >= kps_array.shape[0]:
                         print(f"MaskFromPoseKeypoints: Image {i} - Error: Index {index} out of bounds for {point_type} (Shape: {kps_array.shape})")
-                        all_points_valid = False; break
+                        points_ok = False; break
 
                     x, y, conf = kps_array[index]
 
                     if conf >= confidence_threshold and x > 0 and y > 0:
                         polygon_coords.append((int(x), int(y)))
-                        point_validity_checks[point_name] = True
                     else:
                         print(f"MaskFromPoseKeypoints: Image {i} - Point {point_name} below threshold ({conf:.2f}) or invalid coords (x={x}, y={y}). Cannot form complete polygon.")
-                        point_validity_checks[point_name] = False
-                        all_points_valid = False # Need all points in the defined path
-                        break # Stop trying to build this polygon
+                        points_ok = False
+                        break
+                can_draw = points_ok # Update can_draw based on individual point checks
 
             # --- Drawing ---
-            if all_points_valid and len(polygon_coords) >= 3:
+            if can_draw and len(polygon_coords) >= 3:
                 polygon_np = np.array(polygon_coords, dtype=np.int32).reshape((-1, 1, 2))
                 print(f"MaskFromPoseKeypoints: Image {i} - Drawing refined polygon with {len(polygon_coords)} points.")
-                cv2.fillPoly(current_mask, [polygon_np], 255)
+                cv2.fillPoly(current_mask, [polygon_np], 255) # Fill with white
 
                 if dilation_kernel_size > 0 and dilation_iterations > 0:
                     k_size = dilation_kernel_size if dilation_kernel_size % 2 != 0 else dilation_kernel_size + 1
                     kernel = np.ones((k_size, k_size), np.uint8)
                     current_mask = cv2.dilate(current_mask, kernel, iterations=dilation_iterations)
             else:
-                 if not all_points_valid:
-                     print(f"MaskFromPoseKeypoints: Image {i} - Skipped drawing refined polygon due to missing/invalid points.")
+                 if not can_draw:
+                     print(f"MaskFromPoseKeypoints: Image {i} - Skipped drawing polygon due to missing/invalid points in defined path.")
                  elif len(polygon_coords) < 3:
-                     print(f"MaskFromPoseKeypoints: Image {i} - Skipped drawing refined polygon, not enough valid points ({len(polygon_coords)} < 3).")
+                     print(f"MaskFromPoseKeypoints: Image {i} - Skipped drawing polygon, not enough valid points gathered ({len(polygon_coords)} < 3).")
 
 
             mask_tensor = torch.from_numpy(current_mask.astype(np.float32) / 255.0)
@@ -200,10 +202,11 @@ class MaskFromPoseKeypoints:
         final_mask_batch = torch.stack(output_masks, dim=0)
         return (final_mask_batch,)
 
+
 # --- Node Mappings ---
 NODE_CLASS_MAPPINGS = {
     "MaskFromPoseKeypoints": MaskFromPoseKeypoints
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MaskFromPoseKeypoints": "Mask From Pose Keypoints (Refined)" # Updated name
+    "MaskFromPoseKeypoints": "Mask From Pose Keypoints (Refined)"
 }
