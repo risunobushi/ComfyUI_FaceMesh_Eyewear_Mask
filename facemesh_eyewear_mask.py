@@ -17,38 +17,7 @@ class FaceMeshEyewearMask:
     # Refined indices based on the visual target (yellow area)
     # Tracing the perimeter clockwise:
     EYEWEAR_REGION_INDICES = [
-        # == Top Edge (Brows and Upper Nose Bridge) ==
-        # Start near Left Temple / Outer Brow
-        103, 67, 109, 10,  # Outer-upper brow left -> moving inwards
-        151, # Center top of nose bridge (slightly lower than absolute top brow)
-        338, 297, 332, # Inner -> Outer-upper brow right
-    
-        # == Right Side Edge (Temple) ==
-        286, # Outer corner area right
-        348, # Mid-temple right
-        411, # Lower temple / upper cheek right side
-    
-        # == Bottom Edge (Upper Cheeks / Lower Nose Bridge) ==
-        374, # Right cheek below eye, outer
-        381, # Right cheek below eye, inner-mid
-        367, # Right cheek near nose wing
-        # 364, # Alternate near nose wing right
-        # Crossing nose bridge area below eyes
-        397, # Center point below nose bridge, above tip
-        # 172, # Alternate center point
-        138, # Left cheek near nose wing
-        # 135, # Alternate near nose wing left
-        154, # Left cheek below eye, inner-mid
-        145, # Left cheek below eye, outer
-    
-        # == Left Side Edge (Temple) ==
-        187, # Lower temple / upper cheek left side
-        119, # Mid-temple left
-        56, # Outer corner area left
-    
-        # Connecting back towards the start (103)
-        # (cv2.fillPoly usually closes it, but being explicit can help visualize)
-        # 103 # Already listed as start
+        21, 68, 104, 69, 108, 151, 337, 299, 333, 298, 301, 389, 454, 366, 323, 491, 411, 425, 423, 294, 344, 440, 275, 4, 45, 220, 115, 48, 64, 203, 205, 147, 234, 21
     ]
 
     @classmethod
