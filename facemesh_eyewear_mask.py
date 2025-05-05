@@ -14,28 +14,41 @@ mp_drawing_styles = mp.solutions.drawing_styles # Not strictly needed for mask
 class FaceMeshEyewearMask:
     # --- MediaPipe Landmark Indices for Eyewear Region ---
     # These define the polygon boundary. Adjust if needed.
+    # Refined indices based on the visual target (yellow area)
+    # Tracing the perimeter clockwise:
     EYEWEAR_REGION_INDICES = [
-        # Left Side (temple -> brow -> nose bridge)
-        234, 127, 162, # Left temple/sideburn area
-        226, 130, 25,  # Upper outer brow ridge left
-        27, 29, 30,    # Upper mid brow left
-        159, 158, 157, # Inner brow / upper nose bridge left
-        168,           # Top of nose bridge center
-        # Right Side (nose bridge -> brow -> temple)
-        384, 385, 386, # Inner brow / upper nose bridge right
-        398, 382, 260, # Upper mid brow right
-        255, 359, 446, # Upper outer brow ridge right
-        389, 454,      # Right temple area
-        # Right Side (temple -> cheek -> nose bridge)
-        356, 361,      # Lower temple / sideburn right
-        414, 280,      # Lower cheek right
-        341, 346,      # Lower cheek / side nose right
-        # Lower Nose Bridge (can refine these points)
-        164,           # Slightly lower center nose bridge point
-        # Left Side (nose bridge -> cheek -> temple)
-        117, 112,      # Lower cheek / side nose left
-        50, 340,       # Lower cheek left
-        132, 172,      # Lower temple / sideburn left
+        # == Top Edge (Brows and Upper Nose Bridge) ==
+        # Start near Left Temple / Outer Brow
+        103, 67, 109, 10,  # Outer-upper brow left -> moving inwards
+        151, # Center top of nose bridge (slightly lower than absolute top brow)
+        338, 297, 332, # Inner -> Outer-upper brow right
+    
+        # == Right Side Edge (Temple) ==
+        286, # Outer corner area right
+        348, # Mid-temple right
+        411, # Lower temple / upper cheek right side
+    
+        # == Bottom Edge (Upper Cheeks / Lower Nose Bridge) ==
+        374, # Right cheek below eye, outer
+        381, # Right cheek below eye, inner-mid
+        367, # Right cheek near nose wing
+        # 364, # Alternate near nose wing right
+        # Crossing nose bridge area below eyes
+        397, # Center point below nose bridge, above tip
+        # 172, # Alternate center point
+        138, # Left cheek near nose wing
+        # 135, # Alternate near nose wing left
+        154, # Left cheek below eye, inner-mid
+        145, # Left cheek below eye, outer
+    
+        # == Left Side Edge (Temple) ==
+        187, # Lower temple / upper cheek left side
+        119, # Mid-temple left
+        56, # Outer corner area left
+    
+        # Connecting back towards the start (103)
+        # (cv2.fillPoly usually closes it, but being explicit can help visualize)
+        # 103 # Already listed as start
     ]
 
     @classmethod
