@@ -2,31 +2,35 @@ import torch
 import numpy as np
 from PIL import Image
 import cv2 # OpenCV for drawing and dilation
+from einops import rearrange # Need einops for reshaping flat list
 
 class MaskFromPoseKeypoints:
-    # --- OpenPose Keypoint Indices (Body_25 convention often used) ---
-    # We need Nose, Eyes, and Ears
+    # OpenPose Keypoint Indices (Body_25 standard uses 25 points, 0-24)
+    # DWPose output based on COCO has 18 points (0-17), matching the indices below.
     NOSE_IDX = 0
-    LEYE_IDX = 15
-    REYE_IDX = 16
-    LEAR_IDX = 17
-    REAR_IDX = 18
+    LEYE_IDX = 15 # Index for Left Eye in COCO/DWPose output
+    REYE_IDX = 16 # Index for Right Eye in COCO/DWPose output
+    LEAR_IDX = 17 # Index for Left Ear in COCO/DWPose output
+    REAR_IDX = 18 # Index for Right Ear - DWPose uses 18 keypoints (0-17), so this index is OUT OF BOUNDS for standard DWPose output.
 
-    # Define the order to create the polygon mask
-    # Left Ear -> Left Eye -> Nose -> Right Eye -> Right Ear -> (Implicit close)
-    POLYGON_ORDER_INDICES = [LEAR_IDX, LEYE_IDX, NOSE_IDX, REYE_IDX, REAR_IDX]
+    # Revised polygon order using ONLY valid DWPose indices (0-17)
+    # Left Ear (17) -> Left Eye (15) -> Nose (0) -> Right Eye (16) -> (Close)
+    # We cannot include Right Ear (18) as it doesn't exist in the 18-point format.
+    POLYGON_ORDER_INDICES = [LEAR_IDX, LEYE_IDX, NOSE_IDX, REYE_IDX]
 
     # Minimum required keypoints for a basic mask (Eyes and Nose)
-    REQUIRED_INDICES = [LEYE_IDX, NOSE_IDX, REYE_IDX]
+    REQUIRED_INDICES = [LEYE_IDX, NOSE_IDX, REYE_IDX] # Indices 15, 0, 16
+
+    # Maximum valid index for DWPose/COCO 18-point format
+    MAX_DWPOSE_INDEX = 17
+
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                # Input from DWPose Estimator or similar node
                 "pose_keypoints": ("POSE_KEYPOINT", ),
-                # Used to get the height/width for the output mask
-                "reference_image": ("IMAGE", ),
+                "reference_image": ("IMAGE", ), # Used for dimensions
                 "confidence_threshold": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "dilation_kernel_size": ("INT", {"default": 5, "min": 0, "max": 51, "step": 2}),
                 "dilation_iterations": ("INT", {"default": 2, "min": 0, "max": 10, "step": 1}),
@@ -36,124 +40,109 @@ class MaskFromPoseKeypoints:
     RETURN_TYPES = ("MASK",)
     RETURN_NAMES = ("mask",)
     FUNCTION = "generate_mask"
-    CATEGORY = "image/masking/landmarks" # New category perhaps?
+    CATEGORY = "image/masking/landmarks"
     OUTPUT_NODE = False
 
     def generate_mask(self, pose_keypoints, reference_image, confidence_threshold, dilation_kernel_size, dilation_iterations):
-        # Get dimensions from the reference image
         batch_size, img_h, img_w, _ = reference_image.shape
         output_masks = []
 
-        # Check if pose_keypoints is a list and matches batch size (or handle mismatch)
         if not isinstance(pose_keypoints, list):
-             print("Warning: pose_keypoints input is not a list. Assuming single item.")
-             pose_keypoints = [pose_keypoints] # Wrap in list
+             print("MaskFromPoseKeypoints: Warning - pose_keypoints input is not a list. Wrapping it.")
+             pose_keypoints = [pose_keypoints]
 
         num_poses = len(pose_keypoints)
-        print(f"Received {num_poses} pose keypoint sets for a batch of {batch_size} images.")
+        print(f"MaskFromPoseKeypoints: Received {num_poses} pose keypoint sets for a batch of {batch_size} images.")
 
         for i in range(batch_size):
-            # Create a blank mask for this image
             current_mask = np.zeros((img_h, img_w), dtype=np.uint8)
+            keypoints_array = None # Will hold the Nx3 numpy array
 
-            # Get the corresponding pose data for the current image
-            # Handle potential mismatch between image batch size and pose data list size
+            # --- Start Revised Parsing ---
+            pose_frame = None
             if i < num_poses:
-                pose_data = pose_keypoints[i]
+                pose_frame = pose_keypoints[i]
             elif num_poses > 0:
-                 print(f"Warning: Image batch index {i} exceeds pose data list size {num_poses}. Reusing last pose data.")
-                 pose_data = pose_keypoints[-1] # Reuse the last available pose data
+                 print(f"MaskFromPoseKeypoints: Warning - Image batch index {i} exceeds pose data list size {num_poses}. Reusing last pose data.")
+                 pose_frame = pose_keypoints[-1]
+
+            if isinstance(pose_frame, dict) and "people" in pose_frame:
+                people = pose_frame["people"]
+                if people: # Check if list is not empty
+                    person_data = people[0] # Get the first person
+                    if isinstance(person_data, dict) and 'pose_keypoints_2d' in person_data:
+                        raw_kps_list = person_data['pose_keypoints_2d']
+                        # Check if it's a flat list [x,y,c, x,y,c,...]
+                        if isinstance(raw_kps_list, list) and len(raw_kps_list) > 0 and len(raw_kps_list) % 3 == 0:
+                            try:
+                                # Reshape the flat list into (N, 3) array
+                                num_keypoints = len(raw_kps_list) // 3
+                                keypoints_array = np.array(raw_kps_list).reshape(num_keypoints, 3)
+                                print(f"MaskFromPoseKeypoints: Image {i} - Successfully parsed {num_keypoints} keypoints for person 0.")
+                            except Exception as e:
+                                print(f"MaskFromPoseKeypoints: Image {i} - Error reshaping keypoints list: {e}")
+                        # Handle case where it might already be [[x,y,c], ...] (less likely based on aux code)
+                        elif isinstance(raw_kps_list, list) and len(raw_kps_list) > 0 and isinstance(raw_kps_list[0], list) and len(raw_kps_list[0]) == 3:
+                             keypoints_array = np.array(raw_kps_list)
+                             print(f"MaskFromPoseKeypoints: Image {i} - Parsed keypoints as list of lists for person 0.")
+                        else:
+                             print(f"MaskFromPoseKeypoints: Image {i} - 'pose_keypoints_2d' has unexpected format or length: {raw_kps_list}")
+                    else:
+                        print(f"MaskFromPoseKeypoints: Image {i} - First person dict missing 'pose_keypoints_2d' key.")
+                else:
+                    print(f"MaskFromPoseKeypoints: Image {i} - 'people' list is empty.")
             else:
-                 print(f"Warning: No pose data available for image index {i}. Generating black mask.")
-                 pose_data = None # No data available
-
-            keypoints = None
-            if isinstance(pose_data, dict):
-                # Attempt to extract keypoints, handling different structures
-                if 'keypoints' in pose_data: # Structure like {'keypoints': [[x,y,c],...]}
-                    keypoints = np.array(pose_data['keypoints'])
-                elif 'candidate' in pose_data and 'subset' in pose_data: # Standard OpenPose JSON output
-                    try:
-                        candidates = np.array(pose_data['candidate'])
-                        subsets = np.array(pose_data['subset'])
-                        if subsets.shape[0] > 0:
-                            person_indices = subsets[0, 0:19].astype(int) # First person, body_25 indices
-                            temp_kpts = np.zeros((19, 3))
-                            valid_count = 0
-                            for kpt_idx in range(19):
-                                candidate_idx = person_indices[kpt_idx]
-                                if candidate_idx != -1:
-                                    if candidate_idx < len(candidates):
-                                        temp_kpts[kpt_idx] = candidates[candidate_idx, 0:3]
-                                        valid_count += 1
-                                    else:
-                                         print(f"Warning: Candidate index {candidate_idx} out of bounds for candidates list (len={len(candidates)})")
-                            if valid_count > 0:
-                                keypoints = temp_kpts # Assign if we parsed successfully
-                    except Exception as e:
-                        print(f"Error parsing 'candidate'/'subset' structure: {e}")
-            elif pose_data is None:
-                 pass # No data, keypoints remain None
-            else:
-                 print(f"Warning: Unexpected type for pose_data element at index {i}: {type(pose_data)}. Expected dict.")
+                print(f"MaskFromPoseKeypoints: Image {i} - pose_frame is not a dict or missing 'people' key.")
+            # --- End Revised Parsing ---
 
 
-            if keypoints is not None and keypoints.shape[0] > max(self.POLYGON_ORDER_INDICES):
+            # --- Polygon Drawing Logic (using keypoints_array) ---
+            if keypoints_array is not None and keypoints_array.shape[0] > self.MAX_DWPOSE_INDEX: # Ensure enough points for indices used
                 polygon_points_indices = []
                 valid_keypoints = {}
 
-                # Extract valid keypoints based on confidence
-                for idx in self.POLYGON_ORDER_INDICES:
-                    # No need to check bounds again here if checked above
-                    kpt = keypoints[idx]
+                for idx in self.POLYGON_ORDER_INDICES: # Use the VALID indices [17, 15, 0, 16]
+                    # We already checked shape[0] > MAX_DWPOSE_INDEX (17), so idx 17 is safe if check passes
+                    kpt = keypoints_array[idx]
                     x, y, conf = kpt[0], kpt[1], kpt[2]
-                    # Check confidence and basic validity (non-zero coords)
+
                     if conf >= confidence_threshold and x > 0 and y > 0:
-                         # Optional: Add boundary checks (x < img_w, y < img_h) if coords aren't guaranteed valid
-                         valid_keypoints[idx] = (int(x), int(y))
-                         polygon_points_indices.append(idx) # Store index if valid point found
+                        valid_keypoints[idx] = (int(x), int(y))
+                        polygon_points_indices.append(idx)
 
-                # Check if minimum required points are present
-                has_required = all(idx in valid_keypoints for idx in self.REQUIRED_INDICES)
+                has_required = all(idx in valid_keypoints for idx in self.REQUIRED_INDICES) # Check for 15, 0, 16
 
+                # We now only need 3 points minimum (L_Ear, L_Eye, Nose, R_Eye)
                 if has_required and len(polygon_points_indices) >= 3:
-                    # Build the polygon coordinate list using only the valid points found, in order
-                    polygon_coords = [valid_keypoints[idx] for idx in polygon_points_indices]
-
-                    # Convert points to NumPy array for cv2.fillPoly
+                    polygon_coords = [valid_keypoints[idx] for idx in polygon_points_indices] # Get coords in order [17, 15, 0, 16] (if all valid)
                     polygon_np = np.array(polygon_coords, dtype=np.int32).reshape((-1, 1, 2))
 
-                    # Draw the filled polygon on the mask
-                    cv2.fillPoly(current_mask, [polygon_np], 255) # White
+                    print(f"MaskFromPoseKeypoints: Image {i} - Drawing polygon with {len(polygon_coords)} valid points.")
+                    cv2.fillPoly(current_mask, [polygon_np], 255)
 
-                    # Optional: Dilate the mask
                     if dilation_kernel_size > 0 and dilation_iterations > 0:
                         k_size = dilation_kernel_size if dilation_kernel_size % 2 != 0 else dilation_kernel_size + 1
                         kernel = np.ones((k_size, k_size), np.uint8)
                         current_mask = cv2.dilate(current_mask, kernel, iterations=dilation_iterations)
-                # else: # Optional logging if needed
-                #     if not has_required: print(f"MaskFromPoseKeypoints: Missing required keypoints (Eyes/Nose) for image {i}")
-                #     elif len(polygon_points_indices) < 3: print(f"MaskFromPoseKeypoints: Not enough valid polygon points ({len(polygon_points_indices)}) for image {i}")
+                else:
+                     missing_req = [idx for idx in self.REQUIRED_INDICES if idx not in valid_keypoints]
+                     print(f"MaskFromPoseKeypoints: Image {i} - Failed to draw polygon. HasRequired={has_required} (Missing: {missing_req}), NumValidPoints={len(polygon_points_indices)}")
 
-            # else: # Optional logging if needed
-            #      if keypoints is None: print(f"MaskFromPoseKeypoints: No valid keypoints extracted for image {i}")
-            #      else: print(f"MaskFromPoseKeypoints: Keypoints array shape {keypoints.shape} too small for required indices (max index: {max(self.POLYGON_ORDER_INDICES)}) for image {i}")
+            else:
+                kpt_count = keypoints_array.shape[0] if keypoints_array is not None else 0
+                print(f"MaskFromPoseKeypoints: Image {i} - Skipping polygon draw. Keypoints array is None or too small (Count: {kpt_count}, Max Index Needed: {self.MAX_DWPOSE_INDEX}).")
 
 
-            # Convert the NumPy mask back to a Torch tensor (H, W, float32 0-1)
             mask_tensor = torch.from_numpy(current_mask.astype(np.float32) / 255.0)
             output_masks.append(mask_tensor)
 
-        # Stack all masks in the batch
-        final_mask_batch = torch.stack(output_masks, dim=0) # Shape: (B, H, W)
-
+        final_mask_batch = torch.stack(output_masks, dim=0)
         return (final_mask_batch,)
 
-# Node mappings for ComfyUI
+# --- Node Mappings ---
 NODE_CLASS_MAPPINGS = {
     "MaskFromPoseKeypoints": MaskFromPoseKeypoints
 }
-
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskFromPoseKeypoints": "Mask From Pose Keypoints"
 }
