@@ -22,4 +22,4 @@ __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
 # Print confirmation (optional)
 print("Loaded Face Mesh Eyewear Mask Custom Node")
 # print("Loaded OpenPose Eyewear Mask Custom Node") # Comment out or remove if replacing
-print("Loaded Mask From Pose Keypoints Custom Node")
+print("Loaded Mask From Facial Keypoints Custom Node")
