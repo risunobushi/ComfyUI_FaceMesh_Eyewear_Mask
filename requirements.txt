@@ -1,0 +1,4 @@
+mediapipe>=0.9.0,<0.11.0 # Specify versions compatible with your setup if needed
+opencv-python>=4.5 # Or opencv-python-headless
+numpy
+# torch and torchvision are usually handled by ComfyUI's environment
