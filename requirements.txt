@@ -1,4 +1,9 @@
-mediapipe>=0.9.0,<0.11.0 # Specify versions compatible with your setup if needed
-opencv-python>=4.5 # Or opencv-python-headless
+mediapipe>=0.9.0,<0.11.0
+opencv-python>=4.5
 numpy
-# torch and torchvision are usually handled by ComfyUI's environment
+# torch and torchvision are handled by ComfyUI
+
+# DWPose dependencies (usually handled by comfyui_controlnet_aux installation)
+# Add these if running DWPose internally causes issues without them explicitly listed
+# onnxruntime>=1.15.0
+# or onnxruntime-gpu>=1.15.0
