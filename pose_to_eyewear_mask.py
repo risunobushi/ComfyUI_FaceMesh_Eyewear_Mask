@@ -39,6 +39,10 @@ class MaskFromFacialKeypoints:
     LEFT_EYE_INDICES = [36, 37, 38, 39, 40, 41]
     RIGHT_EYE_INDICES = [42, 43, 44, 45, 46, 47]
 
+    # --- Ear Indices (OpenPose/DWPose) ---
+    LEFT_EAR_IDX = 17
+    RIGHT_EAR_IDX = 18
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -51,8 +55,8 @@ class MaskFromFacialKeypoints:
             }
         }
 
-    RETURN_TYPES = ("MASK", "MASK", "MASK", "MASK")
-    RETURN_NAMES = ("mask_eyewear", "mask_nose", "mask_eyes", "mask_composite")
+    RETURN_TYPES = ("MASK", "MASK", "MASK", "MASK", "MASK")
+    RETURN_NAMES = ("mask_eyewear", "mask_nose", "mask_eyes", "mask_ears", "mask_composite")
     FUNCTION = "generate_masks"
     CATEGORY = "image/masking/landmarks"
     OUTPUT_NODE = False
@@ -93,9 +97,18 @@ class MaskFromFacialKeypoints:
             cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
         return mask
 
+    def get_ear_mask(self, img_h, img_w, keypoints, confidence_threshold, radius=15):
+        mask = np.zeros((img_h, img_w), dtype=np.uint8)
+        for idx in [self.LEFT_EAR_IDX, self.RIGHT_EAR_IDX]:
+            if idx < keypoints.shape[0]:
+                x, y, conf = keypoints[idx]
+                if conf >= confidence_threshold and x > 0 and y > 0:
+                    cv2.circle(mask, (int(x), int(y)), radius, 255, -1)
+        return mask
+
     def generate_masks(self, pose_keypoints, reference_image, confidence_threshold, dilation_kernel_size, dilation_iterations):
         batch_size, img_h, img_w, _ = reference_image.shape
-        masks_eyewear, masks_nose, masks_eyes, masks_composite = [], [], [], []
+        masks_eyewear, masks_nose, masks_eyes, masks_ears, masks_composite = [], [], [], [], []
         if not isinstance(pose_keypoints, list): pose_keypoints = [pose_keypoints]
         num_poses = len(pose_keypoints)
 
@@ -103,6 +116,7 @@ class MaskFromFacialKeypoints:
             mask_eyewear = np.zeros((img_h, img_w), dtype=np.uint8)
             mask_nose = np.zeros((img_h, img_w), dtype=np.uint8)
             mask_eyes = np.zeros((img_h, img_w), dtype=np.uint8)
+            mask_ears = np.zeros((img_h, img_w), dtype=np.uint8)
             face_kps_array = None
             pose_frame = pose_keypoints[i] if i < num_poses else (pose_keypoints[-1] if num_poses > 0 else None)
 
@@ -110,6 +124,13 @@ class MaskFromFacialKeypoints:
                 person_data = pose_frame["people"][0]
                 if isinstance(person_data, dict) and 'face_keypoints_2d' in person_data:
                     face_kps_array = self.reshape_keypoints(person_data['face_keypoints_2d'], "Facial")
+                # Try to get body keypoints for ears (OpenPose/DWPose)
+                if 'pose_keypoints_2d' in person_data:
+                    body_kps_array = self.reshape_keypoints(person_data['pose_keypoints_2d'], "Body")
+                else:
+                    body_kps_array = None
+            else:
+                body_kps_array = None
 
             can_draw = True
             if face_kps_array is None or face_kps_array.shape[0] <= self.FACE_MAX_INDEX:
@@ -131,6 +152,10 @@ class MaskFromFacialKeypoints:
                 mask_right_eye = self.get_polygon_mask(img_h, img_w, face_kps_array, self.RIGHT_EYE_INDICES, confidence_threshold)
                 mask_eyes = cv2.bitwise_or(mask_left_eye, mask_right_eye)
 
+            # Ear mask (from body keypoints if available)
+            if body_kps_array is not None and body_kps_array.shape[0] > self.RIGHT_EAR_IDX:
+                mask_ears = self.get_ear_mask(img_h, img_w, body_kps_array, confidence_threshold)
+
             # Dilation (if needed)
             if dilation_kernel_size > 0 and dilation_iterations > 0:
                 k_size = dilation_kernel_size if dilation_kernel_size % 2 != 0 else dilation_kernel_size + 1
@@ -138,20 +163,24 @@ class MaskFromFacialKeypoints:
                 mask_eyewear = cv2.dilate(mask_eyewear, kernel, iterations=dilation_iterations)
                 mask_nose = cv2.dilate(mask_nose, kernel, iterations=dilation_iterations)
                 mask_eyes = cv2.dilate(mask_eyes, kernel, iterations=dilation_iterations)
+                mask_ears = cv2.dilate(mask_ears, kernel, iterations=dilation_iterations)
 
-            # Composite: eyewear minus nose and eyes
+            # Composite: eyewear minus nose and eyes, plus ears
             mask_composite = cv2.bitwise_and(mask_eyewear, cv2.bitwise_not(cv2.bitwise_or(mask_nose, mask_eyes)))
+            mask_composite = cv2.bitwise_or(mask_composite, mask_ears)
 
             # Convert to torch
             masks_eyewear.append(torch.from_numpy(mask_eyewear.astype(np.float32) / 255.0))
             masks_nose.append(torch.from_numpy(mask_nose.astype(np.float32) / 255.0))
             masks_eyes.append(torch.from_numpy(mask_eyes.astype(np.float32) / 255.0))
+            masks_ears.append(torch.from_numpy(mask_ears.astype(np.float32) / 255.0))
             masks_composite.append(torch.from_numpy(mask_composite.astype(np.float32) / 255.0))
 
         return (
             torch.stack(masks_eyewear, dim=0),
             torch.stack(masks_nose, dim=0),
             torch.stack(masks_eyes, dim=0),
+            torch.stack(masks_ears, dim=0),
             torch.stack(masks_composite, dim=0),
         )
 
