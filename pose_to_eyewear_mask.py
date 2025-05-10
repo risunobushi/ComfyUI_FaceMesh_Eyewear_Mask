@@ -34,6 +34,11 @@ class MaskFromFacialKeypoints:
         FACE_L_NOSE_WING, FACE_R_NOSE_WING, FACE_NOSE_BOTTOM_CENTER
     ]
 
+    # --- Eye and Nose Indices (68-point) ---
+    NOSE_POLYGON_INDICES = [30, 31, 32, 33, 34, 35]  # Nose ridge and wings
+    LEFT_EYE_INDICES = [36, 37, 38, 39, 40, 41]
+    RIGHT_EYE_INDICES = [42, 43, 44, 45, 46, 47]
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -46,9 +51,9 @@ class MaskFromFacialKeypoints:
             }
         }
 
-    RETURN_TYPES = ("MASK",)
-    RETURN_NAMES = ("mask",)
-    FUNCTION = "generate_mask"
+    RETURN_TYPES = ("MASK", "MASK", "MASK", "MASK")
+    RETURN_NAMES = ("mask_eyewear", "mask_nose", "mask_eyes", "mask_composite")
+    FUNCTION = "generate_masks"
     CATEGORY = "image/masking/landmarks"
     OUTPUT_NODE = False
 
@@ -62,14 +67,42 @@ class MaskFromFacialKeypoints:
         elif isinstance(kps_list, list) and len(kps_list) > 0 and isinstance(kps_list[0], list) and len(kps_list[0]) == 3: return np.array(kps_list)
         else: print(f"{self.__class__.__name__}: {source_name} unexpected format."); return None
 
-    def generate_mask(self, pose_keypoints, reference_image, confidence_threshold, dilation_kernel_size, dilation_iterations):
+    def get_polygon_mask(self, img_h, img_w, keypoints, indices, confidence_threshold):
+        mask = np.zeros((img_h, img_w), dtype=np.uint8)
+        polygon_coords = []
+        for idx in indices:
+            x, y, conf = keypoints[idx]
+            if conf >= confidence_threshold and x > 0 and y > 0:
+                polygon_coords.append((int(x), int(y)))
+        if len(polygon_coords) >= 3:
+            polygon_np = np.array(polygon_coords, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.fillPoly(mask, [polygon_np], 255)
+        return mask
+
+    def get_ellipse_mask(self, img_h, img_w, keypoints, indices, confidence_threshold):
+        mask = np.zeros((img_h, img_w), dtype=np.uint8)
+        valid_points = []
+        for idx in indices:
+            x, y, conf = keypoints[idx]
+            if conf >= confidence_threshold and x > 0 and y > 0:
+                valid_points.append((int(x), int(y)))
+        if len(valid_points) >= 3:
+            pts = np.array(valid_points)
+            center = tuple(np.mean(pts, axis=0).astype(int))
+            axes = tuple(np.maximum(np.std(pts, axis=0).astype(int) * 2, 5))
+            cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+        return mask
+
+    def generate_masks(self, pose_keypoints, reference_image, confidence_threshold, dilation_kernel_size, dilation_iterations):
         batch_size, img_h, img_w, _ = reference_image.shape
-        output_masks = []
+        masks_eyewear, masks_nose, masks_eyes, masks_composite = [], [], [], []
         if not isinstance(pose_keypoints, list): pose_keypoints = [pose_keypoints]
         num_poses = len(pose_keypoints)
 
         for i in range(batch_size):
-            current_mask = np.zeros((img_h, img_w), dtype=np.uint8)
+            mask_eyewear = np.zeros((img_h, img_w), dtype=np.uint8)
+            mask_nose = np.zeros((img_h, img_w), dtype=np.uint8)
+            mask_eyes = np.zeros((img_h, img_w), dtype=np.uint8)
             face_kps_array = None
             pose_frame = pose_keypoints[i] if i < num_poses else (pose_keypoints[-1] if num_poses > 0 else None)
 
@@ -78,42 +111,49 @@ class MaskFromFacialKeypoints:
                 if isinstance(person_data, dict) and 'face_keypoints_2d' in person_data:
                     face_kps_array = self.reshape_keypoints(person_data['face_keypoints_2d'], "Facial")
 
-            polygon_coords = []
             can_draw = True
             if face_kps_array is None or face_kps_array.shape[0] <= self.FACE_MAX_INDEX:
-                print(f"{self.__class__.__name__}: Image {i} - Facial keypoints insufficient or missing.")
                 can_draw = False
             else:
-                # Optional basic check
-                # for idx in self.REQUIRED_FACE_INDICES:
-                #     if face_kps_array[idx, 2] < confidence_threshold: can_draw = False; break
-                if can_draw:
-                    points_ok = True
-                    for index in self.POLYGON_ORDER_INDICES:
-                        x, y, conf = face_kps_array[index]
-                        if conf >= confidence_threshold and x > 0 and y > 0:
-                            polygon_coords.append((int(x), int(y)))
-                        else:
-                            print(f"{self.__class__.__name__}: Img {i} - Point face_{index} invalid (conf={conf:.2f},x={x},y={y}).")
-                            points_ok = False; break
-                    can_draw = points_ok
+                # Eyewear region
+                polygon_coords = []
+                for index in self.POLYGON_ORDER_INDICES:
+                    x, y, conf = face_kps_array[index]
+                    if conf >= confidence_threshold and x > 0 and y > 0:
+                        polygon_coords.append((int(x), int(y)))
+                if len(polygon_coords) >= 3:
+                    polygon_np = np.array(polygon_coords, dtype=np.int32).reshape((-1, 1, 2))
+                    cv2.fillPoly(mask_eyewear, [polygon_np], 255)
+                # Nose mask (polygon or ellipse)
+                mask_nose = self.get_polygon_mask(img_h, img_w, face_kps_array, self.NOSE_POLYGON_INDICES, confidence_threshold)
+                # Eyes mask (union of left and right eye polygons)
+                mask_left_eye = self.get_polygon_mask(img_h, img_w, face_kps_array, self.LEFT_EYE_INDICES, confidence_threshold)
+                mask_right_eye = self.get_polygon_mask(img_h, img_w, face_kps_array, self.RIGHT_EYE_INDICES, confidence_threshold)
+                mask_eyes = cv2.bitwise_or(mask_left_eye, mask_right_eye)
 
-            if can_draw and len(polygon_coords) >= 3:
-                polygon_np = np.array(polygon_coords, dtype=np.int32).reshape((-1, 1, 2))
-                # print(f"{self.__class__.__name__}: Image {i} - Drawing facial polygon with {len(polygon_coords)} points.")
-                cv2.fillPoly(current_mask, [polygon_np], 255)
-                if dilation_kernel_size > 0 and dilation_iterations > 0:
-                    k_size = dilation_kernel_size if dilation_kernel_size % 2 != 0 else dilation_kernel_size + 1
-                    kernel = np.ones((k_size, k_size), np.uint8)
-                    current_mask = cv2.dilate(current_mask, kernel, iterations=dilation_iterations)
-            # else: # Optional detailed logging if mask isn't drawn
-            #    if face_kps_array is not None: print(f"{self.__class__.__name__}: Img {i} - Skipped drawing. can_draw={can_draw}, #poly_coords={len(polygon_coords)}")
+            # Dilation (if needed)
+            if dilation_kernel_size > 0 and dilation_iterations > 0:
+                k_size = dilation_kernel_size if dilation_kernel_size % 2 != 0 else dilation_kernel_size + 1
+                kernel = np.ones((k_size, k_size), np.uint8)
+                mask_eyewear = cv2.dilate(mask_eyewear, kernel, iterations=dilation_iterations)
+                mask_nose = cv2.dilate(mask_nose, kernel, iterations=dilation_iterations)
+                mask_eyes = cv2.dilate(mask_eyes, kernel, iterations=dilation_iterations)
 
-            mask_tensor = torch.from_numpy(current_mask.astype(np.float32) / 255.0)
-            output_masks.append(mask_tensor)
+            # Composite: eyewear minus nose and eyes
+            mask_composite = cv2.bitwise_and(mask_eyewear, cv2.bitwise_not(cv2.bitwise_or(mask_nose, mask_eyes)))
 
-        final_mask_batch = torch.stack(output_masks, dim=0)
-        return (final_mask_batch,)
+            # Convert to torch
+            masks_eyewear.append(torch.from_numpy(mask_eyewear.astype(np.float32) / 255.0))
+            masks_nose.append(torch.from_numpy(mask_nose.astype(np.float32) / 255.0))
+            masks_eyes.append(torch.from_numpy(mask_eyes.astype(np.float32) / 255.0))
+            masks_composite.append(torch.from_numpy(mask_composite.astype(np.float32) / 255.0))
+
+        return (
+            torch.stack(masks_eyewear, dim=0),
+            torch.stack(masks_nose, dim=0),
+            torch.stack(masks_eyes, dim=0),
+            torch.stack(masks_composite, dim=0),
+        )
 
 # --- Node Mappings ---
 NODE_CLASS_MAPPINGS = {
